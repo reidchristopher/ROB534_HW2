@@ -7,16 +7,51 @@ from RobotClass import Robot
 from GameClass import Game
 from networkFolder.functionList import Map, WorldEstimatingNetwork, DigitClassificationNetwork
 
+def get_direction_to_target(loc, target):
+    
+    x_diff = target[0] - loc[0]
+    y_diff = target[1] - loc[1]
+    
+    if x_diff == 0 and y_diff == 0:
+        print("Asking for direction to target I'm already on")
+        exit(-1)
+    elif abs(x_diff) > abs(y_diff):  
+        if loc[0] < target[0]:
+            direction = "right"
+        elif loc[0] > target[0]:
+            direction = "left"
+    else:
+        if loc[1] < target[1]:
+            direction = "down"
+        elif loc[1] > target[1]:
+            direction = "up"
+    
+    return direction
+
+def is_corner(loc):
+    
+    x = loc[0]
+    y = loc[1]
+    
+    return (x == 0 and y == 27) or (x == 27 and y == 27) or (x == 27 and y == 0)
+
 class InfoGainNavigator:
     def __init__(self):
         
-        self.confidence_threshold = 0.75
+        self.confidence_threshold = 0.9
         self.world_estimator = WorldEstimatingNetwork()
         self.digit_classifier = DigitClassificationNetwork()
         self.mask = np.zeros((28, 28))
         self.path = []
+        self.target = None
+        self.goals = [(0, 27), (27, 27), (27, 0)]
 
     def getAction(self, robot, explored_map):
+        
+        # if we hit a goal and are still here, we messed up
+        if is_corner(robot.getLoc()):
+            self.goals.remove(self.target)
+            self.target = self.goals[0]
         
         self.path.append(robot.getLoc())
 
@@ -33,8 +68,13 @@ class InfoGainNavigator:
                 else:
                     self.mask[row, col] = 1
                     
-        # print(x, y)
-        # print(self.mask, "\n")
+        if self.target is not None:
+            print("Location:", robot.getLoc(), "Target:", self.target)
+            if robot.getLoc()[0] == self.target[0] and robot.getLoc()[1] == self.target[1]:
+                self.target = None
+            else:
+                return get_direction_to_target(robot.getLoc(), self.target)
+        
         direction = None
         
         world_estimate = self.world_estimator.runNetwork(explored_map, self.mask)
@@ -47,23 +87,15 @@ class InfoGainNavigator:
             print("Digit is", digit)
             
             if digit >= 0 and digit <= 2:
-                if x > 0:
-                    direction = "left"
-                else:
-                    direction = "down"
+                self.target = (0, 27)
             elif digit >= 3 and digit <= 5:
-                if x < 27:
-                    direction = "right"
-                else:
-                    direction = "down"
+                self.target = (27, 27)
             elif digit >= 6 and digit <= 9:
-                if x < 27:
-                    direction = "right"
-                else:
-                    direction = "up"
+                self.target = (27, 0)
             else:
                 print("Should be unreachable digit value")
                 exit(-1)
+            return get_direction_to_target(robot.getLoc(), self.target)
         else:
             valid_directions = ["up", "down", "left", "right"]
             starting_entropy = entropy(digit_softmax[0])
@@ -120,22 +152,27 @@ class InfoGainNavigator:
             direction = best_direction
         
             if direction is None:
-                while direction is None:
-
-                    randNumb = randint(0, 3)
-
-                    if randNumb == 0:
-                        direction = 'left'
-                    if randNumb == 1:
-                        direction = 'right'
-                    if randNumb == 2:
-                        direction = 'down'
-                    if randNumb == 3:
-                        direction = 'up'
+                corner_mask = np.zeros((28, 28))
+                corner_mask[0, 27] = 1
+                corner_mask[27, 27] = 1
+                corner_mask[27, 0] = 1
                     
-                    # If it is not a valid move, reset
-                    if not robot.checkValidMove(direction):
-                        direction = None
+                if np.all(self.mask + corner_mask):
+                    self.target = self.goals[0]
+                    direction = get_direction_to_target(robot.getLoc(), self.target)
+                while direction is None:
+                        
+                    print("Looping for direction")
+
+                    rand_row = randint(0, 27)
+                    rand_col = randint(0, 27)
+                    
+                    if self.mask[rand_row, rand_col] == 1 or is_corner((rand_col, rand_row)):
+                        continue
+                    else:
+                        self.target = (rand_col, rand_row)
+                        print("Get direction last resort")
+                        direction = get_direction_to_target(robot.getLoc(), self.target)
         
         return direction
     
@@ -147,14 +184,13 @@ if __name__ == "__main__":
     # Get the current map from the Map Class
     data = map.map
     
-    for i in range(10):
+    for i in range(100):
         print(map.number)
         robot = Robot(0, 0)
         navigator = InfoGainNavigator()
         game = Game(data, map.number, navigator, robot)
         # This loop runs the game for 1000 ticks, stopping if a goal is found.
         for x in range(0, 1000):
-            print(x)
             found_goal = game.tick()
             if found_goal:
                 print(f"Found goal at time step: {game.getIteration()}!")
