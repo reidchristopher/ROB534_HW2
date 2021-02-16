@@ -1,3 +1,9 @@
+# Added code
+
+The additional code for this homework is found in InfoGainNavigator.py (the greedy solver) and SampleNavigator.py (my sampling algorithm). They contain navigator class definitions and will go through 10 samples if the files themselves are run.
+
+# Original README
+
 The objective of this assignment is for the robot, which starts at (0,0) to navigate to a specific corner of the map. The goal depends on what world you occupy. The maps are constructed from the MNIST dataset, a hand drawn number dataset consisting of numbers 0-9. The world is 28x28 grid.
 
 If the MNIST digit is: 
