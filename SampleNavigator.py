@@ -26,8 +26,7 @@ def get_direction_to_target(loc, target):
             direction = "down"
         elif loc[1] > target[1]:
             direction = "up"
-            
-        
+    
     next_x = loc[0]
     next_y = loc[1]
     if direction == "up":
@@ -40,7 +39,7 @@ def get_direction_to_target(loc, target):
         next_x += 1
         
     next_loc = (next_x, next_y)
-            
+        
     if is_corner(next_loc) and not is_corner(target):
         print("Using corner safeguard")
         if next_loc == (0, 27):
@@ -74,9 +73,10 @@ def is_corner(loc):
     
     return (x == 0 and y == 27) or (x == 27 and y == 27) or (x == 27 and y == 0)
 
-class InfoGainNavigator:
+class SampleNavigator:
     def __init__(self):
         
+        self.num_samples = 25
         self.confidence_threshold = 0.85
         self.world_estimator = WorldEstimatingNetwork()
         self.digit_classifier = DigitClassificationNetwork()
@@ -103,7 +103,7 @@ class InfoGainNavigator:
                 # if the square is off the map, do nothing
                 if row > 27 or row < 0 or col < 0 or col > 27:
                     continue
-                # Otherwise add to the new mask if new item
+                # Otherwise add to the mask
                 else:
                     self.mask[row, col] = 1
                     
@@ -113,12 +113,19 @@ class InfoGainNavigator:
             else:
                 return get_direction_to_target(robot.getLoc(), self.target)
         
-        direction = None
-        
         world_estimate = self.world_estimator.runNetwork(explored_map, self.mask)
         digit_softmax = np.exp(self.digit_classifier.runNetwork(world_estimate))
         
-        if np.max(digit_softmax) > self.confidence_threshold:
+        corner_mask = np.zeros((28, 28))
+        corner_mask[0, 27] = 1
+        corner_mask[27, 27] = 1
+        corner_mask[27, 0] = 1
+        
+        all_explored = np.all(self.mask + corner_mask)
+        if all_explored:
+            print("Going with best guess - no more info to gain")
+        
+        if np.max(digit_softmax) > self.confidence_threshold or all_explored:
 
             # go towards goal
             digit = np.argmax(digit_softmax)
@@ -134,78 +141,13 @@ class InfoGainNavigator:
                 exit(-1)
             return get_direction_to_target(robot.getLoc(), self.target)
         else:
-            valid_directions = ["up", "down", "left", "right"]
             starting_entropy = entropy(digit_softmax[0])
-            best_info_gain = -1000
-            best_direction = None
+            best_objective = -10000
+            best_target = None
             
-            for step in valid_directions:
-                if not robot.checkValidMove(step):
-                    continue
-                
-                new_mask = np.zeros((28, 28))
-                new_x = x
-                new_y = y
-                
-                if step == "up":
-                    new_y -= 1
-                elif step == "down":
-                    new_y += 1
-                elif step == "left":
-                    new_x -= 1
-                elif step == "right":
-                    new_x += 1
-                else:
-                    print("Should be unreachable (during exploration calculation)")
-                    exit(-1)
-
-                # The robot can see all the squares around it
-                # So iterate through all nearby squares
-                for row_inc in range(-1, 2):
-                    for col_inc in range(-1, 2):
-                        col = new_x + col_inc
-                        row = new_y + row_inc
-                        # if the square is off the map, do nothing
-                        if row > 27 or row < 0 or col < 0 or col > 27:
-                            continue
-                        # Otherwise add to the new mask if new item
-                        else:
-                            new_mask[row, col] = 0 if self.mask[row, col] == 1 else 1
-                            
-                # make sure we actually take an exploratory step
-                if not np.any(new_mask):
-                    continue
-            
-                new_world_estimate = self.world_estimator.runNetwork(explored_map + world_estimate * new_mask, self.mask + new_mask)
-                new_digit_softmax = np.exp(self.digit_classifier.runNetwork(new_world_estimate))
-                new_entropy = entropy(new_digit_softmax[0])
-                
-                info_gain = starting_entropy - new_entropy
-
-                if info_gain > best_info_gain:
-                    best_info_gain = info_gain
-                    best_direction = step
-                    
-            direction = best_direction
-        
-            if direction is None:
-                corner_mask = np.zeros((28, 28))
-                corner_mask[0, 27] = 1
-                corner_mask[27, 27] = 1
-                corner_mask[27, 0] = 1
-                    
-                if np.all(self.mask + corner_mask):
-                    digit = np.argmax(digit_softmax)
-            
-                    if digit >= 0 and digit <= 2:
-                        self.target = (0, 27)
-                    elif digit >= 3 and digit <= 5:
-                        self.target = (27, 27)
-                    elif digit >= 6 and digit <= 9:
-                        self.target = (27, 0)
-                    direction = get_direction_to_target(robot.getLoc(), self.target)
-                    
-                while direction is None:
+            for _ in range(self.num_samples):
+                sample_target = None
+                while sample_target is None:
 
                     rand_row = randint(0, 27)
                     rand_col = randint(0, 27)
@@ -213,10 +155,57 @@ class InfoGainNavigator:
                     if self.mask[rand_row, rand_col] == 1 or is_corner((rand_col, rand_row)):
                         continue
                     else:
-                        self.target = (rand_col, rand_row)
-                        direction = get_direction_to_target(robot.getLoc(), self.target)
+                        sample_target = (rand_col, rand_row)
+                
+                new_mask = np.zeros((28, 28))
+                sim_x = x
+                sim_y = y
+                steps = 0
+                
+                while (sim_x, sim_y) != sample_target:
+                    steps += 1
+                    sim_direction = get_direction_to_target((sim_x, sim_y), sample_target)
+                    
+                    if sim_direction == "up":
+                        sim_y -= 1
+                    elif sim_direction == "down":
+                        sim_y += 1
+                    elif sim_direction == "left":
+                        sim_x -= 1
+                    elif sim_direction == "right":
+                        sim_x += 1
+
+                    # The robot can see all the squares around it
+                    # So iterate through all nearby squares
+                    for row_inc in range(-1, 2):
+                        for col_inc in range(-1, 2):
+                            col = sim_x + col_inc
+                            row = sim_y + row_inc
+                            # if the square is off the map, do nothing
+                            if row > 27 or row < 0 or col < 0 or col > 27:
+                                continue
+                            # Otherwise add to the new mask if new item
+                            else:
+                                new_mask[row, col] = 0 if self.mask[row, col] == 1 else 1
+                            
+                    # make sure we actually take an exploratory step
+                    if not np.any(new_mask):
+                        continue
+                
+                    new_world_estimate = self.world_estimator.runNetwork(explored_map + world_estimate * new_mask, self.mask + new_mask)
+                    new_digit_softmax = np.exp(self.digit_classifier.runNetwork(new_world_estimate))
+                    new_entropy = entropy(new_digit_softmax[0])
+                    
+                    info_gain = starting_entropy - new_entropy
+                    objective = info_gain / steps
+
+                    if objective > best_objective:
+                        best_objective = objective
+                        best_target = sample_target
+                    
+                self.target = best_target
         
-        return direction
+            return get_direction_to_target(robot.getLoc(), self.target)
     
 if __name__ == "__main__":
     
@@ -233,7 +222,7 @@ if __name__ == "__main__":
         start = time.time()
         print("Correct digit:", map.number)
         robot = Robot(0, 0)
-        navigator = InfoGainNavigator()
+        navigator = SampleNavigator()
         game = Game(data, map.number, navigator, robot)
         # This loop runs for at most 15 minutes
         while (time.time() - start) < (15 * 60.0):
